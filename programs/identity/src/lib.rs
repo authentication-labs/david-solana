@@ -1,10 +1,16 @@
-use anchor_lang::{prelude::*, solana_program::{hash::hash}, Key as AnchorKey,};
+use anchor_lang::{prelude::*, solana_program::hash::hash, Key as AnchorKey,};
+use crate::utils::verify_ed25519_ix;
+use solana_program::sysvar::instructions::{load_instruction_at_checked, ID as IX_ID};
+use solana_program::ed25519_program::ID as ED25519_ID;
+use solana_program::instruction::Instruction;
+pub mod utils;
+pub mod error;
 
 declare_id!("8DXtpG31GL4L215EeREcPhQCFgFjWcWQjX27d9XEFsRo");
 
 #[program]
 pub mod identity {
-    use super::*;
+    pub use super::*;
 
     pub fn get_initialized(_ctx: Context<Initialize>) -> Result<bool> {
         Ok(_ctx.accounts.identity_account.initialized)
@@ -139,27 +145,22 @@ pub mod identity {
         uri: String,
     ) -> Result<[u8; 32]> {
         identity_require_auth(&ctx.accounts.key_context.keys, &sender, KeyPurpose::Claim)?;
-        // let current_program_id = ctx.program_id;
-        
-        // if *current_program_id != issuer {
-        //     if !is_claim_valid(&issuer_wallet, &current_contact, &topic, &signature, &data) {
-        //         return Err(Error::InvalidClaim);
-        //     }
-        // }
-        // if *current_program_id != issuer {
-        //     let is_valid = is_claim_valid(
-        //         _valid_claim_ctx, 
-        //         _key_ctx,
-        //         issuer_wallet, 
-        //         *current_program_id, 
-        //         topic, 
-        //         signature,
-        //         data.clone()
-        //     )?;
-        //     if !is_valid {
-        //         return Err(Error::InvalidClaim.into());
-        //     }
-        // }
+        let current_program_id = ctx.program_id;
+        if *current_program_id != issuer {
+            let is_valid = is_claim_valid(
+                &ctx.accounts.instructions,
+                &ctx.accounts.key_context.keys,
+                issuer_wallet,
+                *current_program_id,
+                topic,
+                signature,
+                data.clone(),
+            )?;
+            if !is_valid {
+                return Err(Error::InvalidClaim.into());
+            }
+        }
+    
         
         let claim_id = hash_claim(&issuer, topic);
         let claims_account = &mut ctx.accounts.claims_account;
@@ -191,60 +192,29 @@ pub mod identity {
     }
 
 
-pub fn remove_claim(ctx: Context<ClaimContext>, sender: Pubkey, claim_id: [u8; 32]) -> Result<()> {
-    // Ensure the action is authorized
-    identity_require_auth(&ctx.accounts.key_context.keys, &sender, KeyPurpose::Claim)?;
+    pub fn remove_claim(ctx: Context<ClaimContext>, sender: Pubkey, claim_id: [u8; 32]) -> Result<()> {
+        // Ensure the action is authorized
+        identity_require_auth(&ctx.accounts.key_context.keys, &sender, KeyPurpose::Claim)?;
 
-    // Locate the claim
-    let claims_account = &mut ctx.accounts.claims_account;
+        // Locate the claim
+        let claims_account = &mut ctx.accounts.claims_account;
 
-    // Find the index of the claim
-    let pos = claims_account.claims.iter().position(|(id, _)| *id == claim_id)
-        .ok_or(Error::ClaimNotFound)?;
+        // Find the index of the claim
+        let pos = claims_account.claims.iter().position(|(id, _)| *id == claim_id)
+            .ok_or(Error::ClaimNotFound)?;
 
-    // Remove the claim from the list
-    claims_account.claims.remove(pos);
+        // Remove the claim from the list
+        claims_account.claims.remove(pos);
 
-    // Emit an event for removed claim
-    emit!(ClaimRemoved {
-        sender,
-        claim_id,
-    });
+        // Emit an event for removed claim
+        emit!(ClaimRemoved {
+            sender,
+            claim_id,
+        });
 
-    Ok(())
-}
+        Ok(())
+    }
 
-    // pub fn is_claim_valid(
-    //     ctx: Context<ClaimContext>,
-    //     issuer_wallet: Pubkey,
-    //     identity: Pubkey,
-    //     topic: u64,
-    //     signature: [u8; 64],
-    //     data: Vec<u8>,
-    // ) -> Result<bool> {
-    //     // Concatenate data
-    //     let mut concatenated_bytes = Vec::new();
-    //     concatenated_bytes.extend_from_slice(&identity.to_bytes());
-    //     concatenated_bytes.extend_from_slice(&topic.to_le_bytes());
-    //     concatenated_bytes.extend_from_slice(&data);
-
-    //     // Check that the signature is valid
-    //     let instruction_sysvar_info = ctx.accounts.instructions.to_account_info();
-    //     // Parse sysvar instructions to ensure signature matches
-    //     let instrs = sysvar::instructions::load_instruction_at_checked(0, &instruction_sysvar_info)?;
-    //     let expected_instruction = instrs.iter().find(|&ix| {
-    //         // Match your instruction based on your prepared Ed25519 processing.
-    //         // This might take parsing of the `ix` to check contents.
-    //     }).ok_or(Error::InvalidSignature)?;
-
-    //     // If found and valid:
-    //     let issuer_wallet_hash = hash_key(&issuer_wallet);
-    //     if key_has_purpose(&ctx.accounts.keys, &issuer_wallet_hash, KeyPurpose::Claim) {
-    //         Ok(true)
-    //     } else {
-    //         Err(Error::InvalidClaim.into())
-    //     }
-    // }
 }
 
 #[event]
@@ -316,6 +286,59 @@ pub fn hash_claim(issuer: &Pubkey, topic: u64) -> [u8; 32] {
     hashed.to_bytes()
 }
 
+
+pub fn is_claim_valid(
+    instructions: &AccountInfo,
+    keys: &Account<KeysAccount>,
+    issuer_wallet: Pubkey,
+    identity: Pubkey,
+    topic: u64,
+    signature: [u8; 64],
+    data: Vec<u8>,
+) -> Result<bool> {
+    // Concatenate data
+    let mut concatenated_bytes = Vec::new();
+    concatenated_bytes.extend_from_slice(&identity.to_bytes());
+    concatenated_bytes.extend_from_slice(&topic.to_le_bytes());
+    concatenated_bytes.extend_from_slice(&data);
+
+    // Verify the Ed25519 signature
+    let instruction_sysvar_info = instructions.to_account_info();
+    let ix: Instruction = load_instruction_at_checked(0, &instruction_sysvar_info)?;
+
+    // Check that the instruction is an Ed25519Program instruction
+    if ix.program_id != ED25519_ID {
+        return Err(Error::InvalidSignature.into());
+    }
+
+    // Verify the Ed25519Program instruction fields
+    verify_ed25519_ix(&ix, &issuer_wallet.to_bytes(), &concatenated_bytes, &signature)?;
+
+    // Check if the issuer's key has the Claim purpose
+    let issuer_wallet_hash = hash_key(&issuer_wallet);
+    if key_has_purpose(keys, &issuer_wallet_hash, KeyPurpose::Claim) {
+        Ok(true)
+    } else {
+        Err(Error::InvalidClaim.into())
+    }
+}
+
+
+/// External instruction that only gets executed if
+/// an `Ed25519Program.createInstructionWithPublicKey`
+/// instruction was sent in the same transaction.
+pub fn verify_ed25519(ctx: Context<Verify>, pubkey: [u8; 32], msg: Vec<u8>, sig: [u8; 64]) -> Result<()> {
+    // Get what should be the Ed25519Program instruction
+    let ix: Instruction = load_instruction_at_checked(0, &ctx.accounts.ix_sysvar).map_err(|e| anchor_lang::prelude::ProgramError::from(e))?;
+
+    // Check that ix is what we expect to have been sent
+    utils::verify_ed25519_ix(&ix, &pubkey, &msg, &sig)?;
+
+    // Do other stuff
+    
+    Ok(())
+}
+
 #[derive(Accounts)]
 pub struct Initialize<'info> {
     #[account(init, payer = user, space = 8 + 1)] // 8 bytes for discriminator, 1 for bool
@@ -341,6 +364,22 @@ pub struct ClaimContext<'info> {
     #[account(mut)]
     pub claims_account: Account<'info, ClaimsAccount>,
     pub key_context: _Key<'info>,
+    /// CHECK: This is safe because we are only reading the instructions sysvar.
+    #[account(address = solana_program::sysvar::instructions::id())]
+    pub instructions: AccountInfo<'info>,
+}
+
+/// Context accounts
+#[derive(Accounts)]
+pub struct Verify<'info> {
+    pub sender: Signer<'info>,
+
+    /// CHECK: The address check is needed because otherwise
+    /// the supplied Sysvar could be anything else.
+    /// The Instruction Sysvar has not been implemented
+    /// in the Anchor framework yet, so this is the safe approach.
+    #[account(address = IX_ID)]
+    pub ix_sysvar: AccountInfo<'info>,
 }
 
 // #[derive(Accounts)]
