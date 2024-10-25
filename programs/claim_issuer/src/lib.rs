@@ -3,14 +3,13 @@ use crate::utils::verify_ed25519_ix;
 use solana_program::sysvar::instructions::{load_instruction_at_checked, ID as IX_ID};
 use solana_program::ed25519_program::ID as ED25519_ID;
 use solana_program::instruction::Instruction;
-// use claim_issuer_lib::claim_issuer;
 pub mod utils;
 pub mod error;
 
 declare_id!("8DXtpG31GL4L215EeREcPhQCFgFjWcWQjX27d9XEFsRo");
 
 #[program]
-pub mod identity {
+pub mod claim_issuer {
     pub use super::*;
 
     pub fn get_initialized(_ctx: Context<Initialize>) -> Result<bool> {
@@ -204,8 +203,10 @@ pub mod identity {
         let pos = claims_account.claims.iter().position(|(id, _)| *id == claim_id)
             .ok_or(Error::ClaimNotFound)?;
 
+        // Remove the claim from the list
         claims_account.claims.remove(pos);
 
+        // Emit an event for removed claim
         emit!(ClaimRemoved {
             sender,
             claim_id,
@@ -214,7 +215,7 @@ pub mod identity {
         Ok(())
     }
 
-    pub fn get_claim(_ctx: Context<ClaimContext>, claim_id: [u8; 32]) -> Result<Option<Claim>> {
+    pub fn get_claim_by_id(_ctx: Context<ClaimContext>, claim_id: [u8; 32]) -> Result<Option<Claim>> {
         let claims_account = &_ctx.accounts.claims_account;
         let claim = claims_account.claims.iter()
             .find(|(id, _)| *id == claim_id)
@@ -222,14 +223,50 @@ pub mod identity {
         Ok(claim)
     }
 
-    pub fn get_claim_ids(_ctx: Context<ClaimContext>) -> Result<Vec<[u8; 32]>> {
-        let claims_account = &_ctx.accounts.claims_account;
-        let claim_ids = claims_account.claims.iter()
-            .map(|(id, _)| *id)
-            .collect();
-        Ok(claim_ids)
-    }
+
+    pub fn revoke_claim(
+        ctx: Context<ClaimContext>,
+        sender: Pubkey,
+        claim_id: [u8; 32],
+    ) -> Result<()> {
+        // Ensure the action is authorized
+        identity_require_auth(&ctx.accounts.key_context.keys, &sender, KeyPurpose::Management)?;
     
+        // Locate the claim
+        let claims_account = &mut ctx.accounts.claims_account;
+    
+        // Find the claim
+        let claim = claims_account.claims.iter()
+            .find(|(id, _)| *id == claim_id)
+            .ok_or(Error::ClaimNotFound)?;
+    
+        // Check if the claim is already revoked
+        let revoked_claims = &mut ctx.accounts.revoked_claims;
+        if revoked_claims.revoked_claims.iter().any(|&s| s == claim.1.signature) {
+            return Err(Error::ClaimAlreadyRevoked.into());
+        }
+    
+        // Add the claim's signature to the revoked claims
+        revoked_claims.revoked_claims.push(claim.1.signature.clone());
+    
+        // Emit an event for revoked claim
+        emit!(ClaimRevoked {
+            sender,
+            claim_id,
+        });
+    
+        Ok(())
+    }
+
+    
+    pub fn is_claim_revoked(
+        ctx: Context<ClaimContext>,
+        signature: [u8; 64],
+    ) -> Result<bool> {
+        let revoked_claims = &ctx.accounts.revoked_claims;
+        Ok(revoked_claims.revoked_claims.iter().any(|&s| s == signature))
+    }
+
 }
 
 #[event]
@@ -266,6 +303,16 @@ pub struct ClaimRemoved {
     pub claim_id: [u8; 32],
 }
 
+#[event]
+pub struct ClaimRevoked {
+    pub sender: Pubkey,
+    pub claim_id: [u8; 32],
+}
+
+#[account]
+pub struct RevokedClaimsAccount {
+    pub revoked_claims: Vec<[u8; 64]>,
+}
 
 fn identity_require_auth(keys_account: &Account<KeysAccount>, sender: &Pubkey, key_type: KeyPurpose) -> Result<()> {
     let key_hash = hash_key(sender);
@@ -382,8 +429,9 @@ pub struct ClaimContext<'info> {
     /// CHECK: This is safe because we are only reading the instructions sysvar.
     #[account(address = solana_program::sysvar::instructions::id())]
     pub instructions: AccountInfo<'info>,
+    #[account(mut)]
+    pub revoked_claims: Account<'info, RevokedClaimsAccount>,
 }
-
 /// Context accounts
 #[derive(Accounts)]
 pub struct Verify<'info> {
@@ -396,15 +444,6 @@ pub struct Verify<'info> {
     #[account(address = IX_ID)]
     pub ix_sysvar: AccountInfo<'info>,
 }
-
-// #[derive(Accounts)]
-// pub struct IsClaimValid<'info> {
-//     pub claims_account: Account<'info, ClaimsAccount>, // Account to manage claims
-//     /// The programs must include the Instructions sysvar account for ed25519 verification
-//     /// Ensure that the sysvar::instructions account is passed to the transaction
-//     #[account(address = solana_program::sysvar::id())]
-//     pub instructions: AccountInfo<'info>,
-// }
 
 #[account]
 pub struct IdentityAccount {

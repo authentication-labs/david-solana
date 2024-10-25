@@ -1,12 +1,12 @@
 [package]
-name = "identity"
+name = "claim_issuer"
 version = "0.1.0"
 description = "Created with Anchor"
 edition = "2021"
 
 [lib]
 crate-type = ["cdylib", "lib"]
-name = "identity_lib"  
+name = "claim_issuer_lib"  
 
 [features]
 default = []
@@ -19,4 +19,4 @@ idl-build = ["anchor-lang/idl-build"]
 [dependencies]
 anchor-lang = "0.30.1"
 solana-program = "1.16.27"
-# claim_issuer = { path = "../claim_issuer",  features = ["no-entrypoint"] }
+identity = { path = "../identity",  features = ["no-entrypoint"] }
