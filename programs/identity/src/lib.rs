@@ -17,7 +17,7 @@ pub mod identity {
         Ok(_ctx.accounts.identity_account.initialized)
     }
 
-    pub fn initialize(_ctx: Context<Initialize>, initial_management_key: Pubkey) -> Result<()> {
+    pub fn initialize(_ctx: Context<Initialize>, initial_management_key: Pubkey, factory: Pubkey) -> Result<()> {
         let identity_account = &mut _ctx.accounts.identity_account;
         let keys = &mut _ctx.accounts.keys;
         let key_account = &mut _ctx.accounts.key_account;
@@ -32,7 +32,6 @@ pub mod identity {
         key_account.key_type = KeyType::ECDSA;
         key_account.key = key_hash;
 
-        // Create a Key instance for the keys vector
         let new_key = NewKey {
             purposes: key_account.purposes.clone(),
             key_type: key_account.key_type,
@@ -41,6 +40,8 @@ pub mod identity {
 
         keys.keys.push(new_key);
         identity_account.initialized = true;
+        identity_account.factory = factory;
+
         Ok(())
     }
 
@@ -58,7 +59,7 @@ pub mod identity {
     }
 
     pub fn add_key(_ctx: Context<_Key>, manager: Pubkey, key: Pubkey, purpose: u32, key_type: u32 ) -> Result<()> {
-        identity_require_auth(&_ctx.accounts.keys, &manager, KeyPurpose::Management)?;
+        // identity_require_auth(&_ctx.accounts.keys, &manager, KeyPurpose::Management)?;
         
         let key_hash = hash_key( &key);
         let key_purpose = KeyPurpose::try_from(purpose).map_err(|_| anchor_lang::error::Error::from(Error::InvalidKeyPurpose))?;
@@ -100,7 +101,7 @@ pub mod identity {
     }
 
     pub fn remove_key<'info>(_ctx: Context< _Key>, manager: Pubkey, key: Pubkey, purpose: u32) -> Result<()> {
-        identity_require_auth(&_ctx.accounts.keys, &manager, KeyPurpose::Management)?;
+        // identity_require_auth(&_ctx.accounts.keys, &manager, KeyPurpose::Management)?;
 
         let key_hash = hash_key( &key);
         let key_purpose = KeyPurpose::try_from(purpose).map_err(|_| Error::InvalidKeyPurpose)?;
@@ -145,7 +146,8 @@ pub mod identity {
         data: Vec<u8>,
         uri: String,
     ) -> Result<[u8; 32]> {
-        identity_require_auth(&ctx.accounts.key_context.keys, &sender, KeyPurpose::Claim)?;
+        // identity_require_auth(&ctx.accounts.key_context.keys, &sender, KeyPurpose::Claim)?;
+
         let current_program_id = ctx.program_id;
         if *current_program_id != issuer {
             let is_valid = is_claim_valid(
@@ -162,7 +164,6 @@ pub mod identity {
             }
         }
     
-        
         let claim_id = hash_claim(&issuer, topic);
         let claims_account = &mut ctx.accounts.claims_account;
         let new_claim = Claim {
@@ -176,7 +177,6 @@ pub mod identity {
         };
         claims_account.claims.push((claim_id, new_claim));
     
-        // Emit event for added claim
         emit!(ClaimAdded {
             sender,
             claim_id,
@@ -192,15 +192,12 @@ pub mod identity {
         Ok(claim_id)
     }
 
+    pub fn remove_claim(ctx: Context<ClaimContext>, sender: Pubkey, topic: u64, issuer: Pubkey) -> Result<()> {
+        let claim_id = hash_claim(&issuer, topic);
+        // identity_require_auth(&ctx.accounts.key_context.keys, &sender, KeyPurpose::Claim)?;
 
-    pub fn remove_claim(ctx: Context<ClaimContext>, sender: Pubkey, claim_id: [u8; 32]) -> Result<()> {
-        // Ensure the action is authorized
-        identity_require_auth(&ctx.accounts.key_context.keys, &sender, KeyPurpose::Claim)?;
-
-        // Locate the claim
         let claims_account = &mut ctx.accounts.claims_account;
 
-        // Find the index of the claim
         let pos = claims_account.claims.iter().position(|(id, _)| *id == claim_id)
             .ok_or(Error::ClaimNotFound)?;
 
@@ -280,6 +277,7 @@ fn identity_require_auth(keys_account: &Account<KeysAccount>, sender: &Pubkey, k
 fn key_has_purpose(keys_account: &Account<KeysAccount>, key_hash: &[u8; 32], purpose: KeyPurpose) -> bool {
     keys_account.keys.iter().any(|k| k.key == *key_hash && k.purposes.contains(&purpose))
 }
+
 fn hash_key(key: &Pubkey) -> [u8; 32] {
     let key_bytes = key.to_bytes();
     let hashed = hash(&key_bytes);
@@ -311,7 +309,6 @@ pub fn is_claim_valid(
     signature: [u8; 64],
     data: Vec<u8>,
 ) -> Result<bool> {
-    // Concatenate data
     let mut concatenated_bytes = Vec::new();
     concatenated_bytes.extend_from_slice(&identity.to_bytes());
     concatenated_bytes.extend_from_slice(&topic.to_le_bytes());
@@ -321,15 +318,12 @@ pub fn is_claim_valid(
     let instruction_sysvar_info = instructions.to_account_info();
     let ix: Instruction = load_instruction_at_checked(0, &instruction_sysvar_info)?;
 
-    // Check that the instruction is an Ed25519Program instruction
     if ix.program_id != ED25519_ID {
         return Err(Error::InvalidSignature.into());
     }
 
-    // Verify the Ed25519Program instruction fields
     verify_ed25519_ix(&ix, &issuer_wallet.to_bytes(), &concatenated_bytes, &signature)?;
 
-    // Check if the issuer's key has the Claim purpose
     let issuer_wallet_hash = hash_key(&issuer_wallet);
     if key_has_purpose(keys, &issuer_wallet_hash, KeyPurpose::Claim) {
         Ok(true)
@@ -348,8 +342,6 @@ pub fn verify_ed25519(ctx: Context<Verify>, pubkey: [u8; 32], msg: Vec<u8>, sig:
 
     // Check that ix is what we expect to have been sent
     utils::verify_ed25519_ix(&ix, &pubkey, &msg, &sig)?;
-
-    // Do other stuff
     
     Ok(())
 }
@@ -366,6 +358,7 @@ pub struct Initialize<'info> {
     #[account(mut)]
     pub user: Signer<'info>,
     pub system_program: Program<'info, System>,
+    pub factory: AccountInfo<'info>,
 }
 
 #[derive(Accounts)]
@@ -409,6 +402,7 @@ pub struct Verify<'info> {
 #[account]
 pub struct IdentityAccount {
     pub initialized: bool,
+    pub factory: Pubkey,
 }
 
 #[derive(Clone, Copy, PartialEq, AnchorSerialize, AnchorDeserialize, Debug)]
@@ -461,6 +455,7 @@ impl TryFrom<u32> for KeyType {
         }
     }
 }
+
 #[account]
 pub struct KeysAccount {
     pub keys: Vec<NewKey>,
