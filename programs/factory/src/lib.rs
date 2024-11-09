@@ -205,9 +205,9 @@ pub mod factory_contract {
                 add_key(ctx, wallet, key, purpose, key_type)?;
             }
             "AddClaim" => {
-                let (wallet, topic, scheme, issuer_wallet, issuer, signature, data, uri) =
+                let (wallet, topic, scheme, issuer_wallet, signature, data, uri) =
                     decode_add_claim_payload(&payload)?;
-                add_claim(ctx, wallet, topic, scheme, issuer_wallet, issuer, signature, data, uri)?;
+                add_claim(ctx, wallet, topic, scheme, issuer_wallet, signature, data, uri)?;
             }
             "RemoveKey" => {
                 let (wallet, key, purpose) = decode_remove_key_payload(&payload)?;
@@ -226,22 +226,22 @@ pub mod factory_contract {
 }
 
 
-
 fn add_claim(
     ctx: Context<LzReceive>,
     wallet: Pubkey,
     topic: u64,
     scheme: u64,
     issuer_wallet: Pubkey,
-    issuer: Pubkey,
     signature: [u8; 64],
     data: Vec<u8>,
     uri: String,
 ) -> Result<()> {
     let identity_address = find_identity_address(&ctx, wallet)?;
 
+    let issuer = find_identity_address(&ctx, wallet)?;
+
     let instruction = Instruction {
-        program_id: ctx.accounts.identity_program.key(),
+        program_id: issuer, // Assuming you still want to instruct on the identity program
         accounts: vec![
             AccountMeta::new(identity_address, false),
             AccountMeta::new(ctx.accounts.factory.owner, true),
@@ -252,11 +252,11 @@ fn add_claim(
             data_vec.extend_from_slice(&topic.to_le_bytes());
             data_vec.extend_from_slice(&scheme.to_le_bytes());
             data_vec.extend_from_slice(&issuer_wallet.to_bytes());
-            data_vec.extend_from_slice(&issuer.to_bytes());
+            data_vec.extend_from_slice(&issuer.to_bytes()); // Use identity contract as issuer
             data_vec.extend_from_slice(&signature);
             data_vec.extend_from_slice(&(data.len() as u32).to_le_bytes());
             data_vec.extend_from_slice(&data); 
-            data_vec.extend_from_slice(&(uri.len() as u32).to_le_bytes()[..]);
+            data_vec.extend_from_slice(&(uri.len() as u32).to_le_bytes());
             data_vec.extend_from_slice(uri.as_bytes());
             data_vec
         },
@@ -464,24 +464,22 @@ fn decode_create_identity_payload(payload: &[u8]) -> std::result::Result<(Pubkey
 
 fn decode_add_claim_payload(
     payload: &[u8],
-) -> std::result::Result<(Pubkey, u64, u64, Pubkey, Pubkey, [u8; 64], Vec<u8>, String), ProgramError> {
+) -> std::result::Result<(Pubkey, u64, u64, Pubkey, [u8; 64], Vec<u8>, String), ProgramError> {
     let mut cursor = std::io::Cursor::new(payload);
 
+    // Decode `wallet`
     let mut wallet_bytes = [0u8; 32];
     cursor.read_exact(&mut wallet_bytes)?;
     let wallet = Pubkey::new_from_array(wallet_bytes);
 
+    // Decode the topic and scheme
     let topic = cursor.read_u64::<LittleEndian>()?;
     let scheme = cursor.read_u64::<LittleEndian>()?;
 
-    let mut issuer_wallet_bytes = [0u8; 32];
-    cursor.read_exact(&mut issuer_wallet_bytes)?;
-    let issuer_wallet = Pubkey::new_from_array(issuer_wallet_bytes);
+    // Issuer Wallet and Issuer use `wallet`
+    let issuer_wallet = wallet;
 
-    let mut issuer_bytes = [0u8; 32];
-    cursor.read_exact(&mut issuer_bytes)?;
-    let issuer = Pubkey::new_from_array(issuer_bytes);
-
+    // Decode the remaining fields; signature, data, and uri
     let mut signature = [0u8; 64];
     cursor.read_exact(&mut signature)?;
 
@@ -493,7 +491,7 @@ fn decode_add_claim_payload(
     cursor.read_to_end(&mut uri_buffer)?;
     let uri = String::from_utf8(uri_buffer).map_err(|_| ProgramError::InvalidInstructionData)?;
 
-    Ok((wallet, topic, scheme, issuer_wallet, issuer, signature, data, uri))
+    Ok((wallet, topic, scheme, issuer_wallet, signature, data, uri))
 }
 
 fn decode_remove_claim_payload(
