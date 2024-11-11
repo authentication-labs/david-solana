@@ -7,7 +7,7 @@ use solana_program::instruction::Instruction;
 pub mod utils;
 pub mod error;
 
-declare_id!("8DXtpG31GL4L215EeREcPhQCFgFjWcWQjX27d9XEFsRo");
+declare_id!("E9ccxAi2FCfiCo75uAYkrnTe7GW9Xe17ksikYHMenX4f");
 
 #[program]
 pub mod identity {

@@ -9,9 +9,11 @@ david_solana = "8DXtpG31GL4L215EeREcPhQCFgFjWcWQjX27d9XEFsRo"
 
 [registry]
 url = "https://api.apr.dev"
+[programs.devnet]
+factory_lib = "CyKce9sNf2SHyLZgS9URiu2o1tDs8UeASzpwtH3dpadt"
 
 [provider]
-cluster = "Localnet"
+cluster = "Devnet"
 wallet = "~/.config/solana/id.json"
 
 [scripts]

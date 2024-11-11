@@ -12,25 +12,20 @@ pub mod state;
 pub mod instructions;
 
 use errors::*;
-use crate::state::*;
 use crate::instructions::*;
 
-pub const PEER_SEED: &[u8] = b"Peer";
 pub const LZ_RECEIVE_TYPES_SEED: &[u8] = oapp::LZ_RECEIVE_TYPES_SEED;
 
 pub const MAX_FEE_BASIS_POINTS: u16 = 10_000;
 
-declare_id!("Fg6PaFpoGXkYsidMpWFK1THCyGDMhJWAXR2ZsD6xXc6C");
+declare_id!("CyKce9sNf2SHyLZgS9URiu2o1tDs8UeASzpwtH3dpadt");
 
 #[program]
 pub mod factory_contract {
     use super::*;
 
-    pub fn set_peer_config(
-        mut ctx: Context<SetPeerConfig>,
-        params: SetPeerConfigParams,
-    ) -> Result<()> {
-        SetPeerConfig::apply(&mut ctx, &params)
+    pub fn set_remote(mut ctx: Context<SetRemote>, params: SetRemoteParams) -> Result<()> {
+        SetRemote::apply(&mut ctx, &params)
     }
 
     pub fn initialize(ctx: Context<Initialize>) -> Result<()> {
