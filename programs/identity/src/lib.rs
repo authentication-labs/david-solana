@@ -7,7 +7,7 @@ use solana_program::instruction::Instruction;
 pub mod utils;
 pub mod error;
 
-declare_id!("E9ccxAi2FCfiCo75uAYkrnTe7GW9Xe17ksikYHMenX4f");
+declare_id!("Gono8cHfm7zUfgdmSEcuvCx2WsN2LEK2ymtdoS67cVDK");
 
 #[program]
 pub mod identity {
@@ -264,15 +264,15 @@ pub struct ClaimRemoved {
 }
 
 
-fn identity_require_auth(keys_account: &Account<KeysAccount>, sender: &Pubkey, key_type: KeyPurpose) -> Result<()> {
-    let key_hash = hash_key(sender);
+// fn identity_require_auth(keys_account: &Account<KeysAccount>, sender: &Pubkey, key_type: KeyPurpose) -> Result<()> {
+//     let key_hash = hash_key(sender);
 
-    if !key_has_purpose(keys_account, &key_hash, key_type) {
-        return Err(Error::InsufficientPermissions.into());
-    }
+//     if !key_has_purpose(keys_account, &key_hash, key_type) {
+//         return Err(Error::InsufficientPermissions.into());
+//     }
 
-    Ok(())
-}
+//     Ok(())
+// }
 
 fn key_has_purpose(keys_account: &Account<KeysAccount>, key_hash: &[u8; 32], purpose: KeyPurpose) -> bool {
     keys_account.keys.iter().any(|k| k.key == *key_hash && k.purposes.contains(&purpose))

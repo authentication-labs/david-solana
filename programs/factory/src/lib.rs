@@ -1,7 +1,6 @@
 use std::io::Read;
 use byteorder::{ReadBytesExt, LittleEndian};
 
-
 use anchor_lang::{prelude::*, solana_program, Result, require};
 use solana_program::{instruction::{Instruction, AccountMeta}, program::invoke_signed, pubkey::Pubkey};
 use identity_lib::program::Identity;
@@ -10,15 +9,14 @@ use oapp::LzReceiveParams;
 pub mod errors;
 pub mod state;
 pub mod instructions;
+mod msg_codec;
 
-use errors::*;
 use crate::instructions::*;
+use state::*;
 
 pub const LZ_RECEIVE_TYPES_SEED: &[u8] = oapp::LZ_RECEIVE_TYPES_SEED;
 
-pub const MAX_FEE_BASIS_POINTS: u16 = 10_000;
-
-declare_id!("CyKce9sNf2SHyLZgS9URiu2o1tDs8UeASzpwtH3dpadt");
+declare_id!("EjTQazH7zvwvBFDkbJRnpvQfjuQBqjHTdbYE25iaxZoJ");
 
 #[program]
 pub mod factory_contract {
@@ -26,6 +24,10 @@ pub mod factory_contract {
 
     pub fn set_remote(mut ctx: Context<SetRemote>, params: SetRemoteParams) -> Result<()> {
         SetRemote::apply(&mut ctx, &params)
+    }
+
+    pub fn init_count(mut ctx: Context<InitCount>, params: InitCountParams) -> Result<()> {
+        InitCount::apply(&mut ctx, &params)
     }
 
     pub fn initialize(ctx: Context<Initialize>) -> Result<()> {
@@ -186,40 +188,20 @@ pub mod factory_contract {
 
         Ok(())
     }
-    pub fn lz_receive(ctx: Context<LzReceive>, params: LzReceiveParams) -> Result<()> {
-        let (method_name, payload) = decode_message(&params.message)?;
 
-        match method_name.as_str() {
-            "CreateIdentity" => {
-                let (identity_owner, salt) = decode_create_identity_payload(&payload)?;
-                let initial_management_key = ctx.accounts.factory.owner; 
-                create_identity(ctx, identity_owner, salt, initial_management_key)?;
-            }
-            "AddKey" => {
-                let (wallet, key, purpose, key_type) = decode_add_key_payload(&payload)?;
-                add_key(ctx, wallet, key, purpose, key_type)?;
-            }
-            "AddClaim" => {
-                let (wallet, topic, scheme, issuer_wallet, signature, data, uri) =
-                    decode_add_claim_payload(&payload)?;
-                add_claim(ctx, wallet, topic, scheme, issuer_wallet, signature, data, uri)?;
-            }
-            "RemoveKey" => {
-                let (wallet, key, purpose) = decode_remove_key_payload(&payload)?;
-                remove_key(ctx, wallet, key, purpose)?;
-            }
-            "RemoveClaim" => {
-                let (wallet, topic) = decode_remove_claim_payload(&payload)?;
-                remove_claim(ctx, wallet, topic)?;
-            }
-            _ => return Err(ProgramError::InvalidInstructionData.into()),
-        }
+    pub fn lz_receive(mut ctx: Context<LzReceive>, params: LzReceiveParams) -> Result<()> {
+        LzReceive::apply(ctx, &params)
+    }
 
-        Ok(())
+
+    pub fn lz_receive_types(
+        ctx: Context<LzReceiveTypes>,
+        params: LzReceiveParams,
+    ) -> Result<Vec<oapp::endpoint_cpi::LzAccount>> {
+        LzReceiveTypes::apply(&ctx, &params)
     }
 
 }
-
 
 fn add_claim(
     ctx: Context<LzReceive>,
@@ -584,20 +566,6 @@ pub struct Claim {
 }
 
 #[derive(Accounts)]
-pub struct LzReceive<'info> {
-    #[account(mut)]
-    pub factory: Account<'info, Factory>,
-    #[account(mut)]
-    pub payer: Signer<'info>,
-    pub system_program: Program<'info, System>,
-    #[account(address = identity_lib::ID)]
-    pub identity_program: Program<'info, Identity>,
-    pub keys_account: Account<'info, KeysAccount>,
-    pub claims_account: Account<'info, ClaimsAccount>,
-}
-
-
-#[derive(Accounts)]
 pub struct Initialize<'info> {
     #[account(init, payer = payer, space = Factory::calc_size(100, 100))]
     pub factory: Account<'info, Factory>,
@@ -638,11 +606,26 @@ pub struct Factory {
     pub identity_addresses: Vec<Pubkey>,
     pub linked_wallets: Vec<Pubkey>,
     pub wallet_to_identity: Vec<(Pubkey, Pubkey)>,
+    pub id: u8,
+    pub bump: u8,
+    pub endpoint_program: Pubkey,
 }
+
 
 impl Factory {
     pub fn calc_size(id_count: usize, wallet_count: usize) -> usize {
-        8 + 1 + 32 + 4 + id_count * 32 + 4 + wallet_count * 32
+        // Calculate the size of the Factory account
+        // 8 bytes for discriminator
+        // 1 byte for initialized
+        // 32 bytes for owner
+        // 4 bytes for the length of identity_addresses vector
+        // id_count * 32 bytes for each Pubkey in identity_addresses
+        // 4 bytes for the length of linked_wallets vector
+        // wallet_count * 32 bytes for each Pubkey in linked_wallets
+        // 1 byte for id
+        // 1 byte for bump
+        // 32 bytes for endpoint_program
+        8 + 1 + 32 + 4 + id_count * 32 + 4 + wallet_count * 32 + 1 + 1 + 32
     }
 }
 

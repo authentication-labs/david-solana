@@ -1,5 +1,4 @@
 use crate::*;
-use anchor_lang::prelude::*;
 
 #[account]
 pub struct Remote {
@@ -19,7 +18,9 @@ pub struct SetRemote<'info> {
     #[account(
         init_if_needed,
         payer = admin,
-        space = Remote::SIZE
+        space = Remote::SIZE,
+        seeds = [b"remote", admin.key().as_ref()],
+        bump
     )]
     pub remote: Account<'info, Remote>,
     pub system_program: Program<'info, System>,

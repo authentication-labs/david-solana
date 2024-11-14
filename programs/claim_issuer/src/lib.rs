@@ -6,7 +6,7 @@ use solana_program::instruction::Instruction;
 pub mod utils;
 pub mod error;
 
-declare_id!("3epy7uXCLmQoDjruMjEbG3iAquBzJtP8NbPeU21cu1Zx");
+declare_id!("3BWQvZ8vUQewDzAcDmoYa2PzKFazgaCBnKQNFQx15hXM");
 
 #[program]
 pub mod claim_issuer {

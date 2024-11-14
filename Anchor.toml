@@ -10,7 +10,7 @@ david_solana = "8DXtpG31GL4L215EeREcPhQCFgFjWcWQjX27d9XEFsRo"
 [registry]
 url = "https://api.apr.dev"
 [programs.devnet]
-factory_lib = "CyKce9sNf2SHyLZgS9URiu2o1tDs8UeASzpwtH3dpadt"
+factory_lib = "3CzE1PfMUS8gXSx96M9m83SoUp8j9tXB7RFv9aBsMSoA"
 
 [provider]
 cluster = "Devnet"
