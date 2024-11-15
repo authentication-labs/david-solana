@@ -1,38 +1,38 @@
 import { arrayify, hexZeroPad } from '@ethersproject/bytes';
 import { Connection, Keypair, PublicKey, SystemProgram, TransactionInstruction } from '@solana/web3.js';
-import { buildVersionedTransaction, oappIDPDA, EndpointProgram, EventPDADeriver, SimpleMessageLibProgram, UlnProgram } from '@layerzerolabs/lz-solana-sdk-v2';
+import { buildVersionedTransaction, ExecutorPDADeriver, oappIDPDA, EndpointProgram, EventPDADeriver, SetConfigType, UlnProgram } from '@layerzerolabs/lz-solana-sdk-v2';
 import * as anchor from '@project-serum/anchor';
 import { readFileSync } from 'fs';
 import { EndpointId } from '@layerzerolabs/lz-definitions';
+import dotenv from 'dotenv';
 
-// Establish connection to the Solana devnet
-const connection = new Connection('https://api.devnet.solana.com');
+dotenv.config();
+
+const connection = new Connection(process.env.RPC_URL_SOLANA_DEVNET);
 
 const remotePeers = {
-    [EndpointId.OPTIMISM_V2_TESTNET]: '0x632824675C8871A1D4e2e692c121bE4eDC4051e2', // EVM counter addr
+    [EndpointId.SEPOLIA_V2_TESTNET]: process.env.SEPOLIA_CONTRACT_ADDRESS, // EVM counter addr
 };
 
 const endpointProgram = new EndpointProgram.Endpoint(new PublicKey('76y77prsiCMvXMjuoZ5VRrhG5qYBrUMYTE5WgHqgjEn6')); // endpoint program id
+const ulnProgram = new UlnProgram.Uln(new PublicKey('7a4WjyR8VZ7yZz5XJAKm39BUGn5iT9CKcv2pmG9tdXVH')) // uln program id, mainnet and testnet are the same
+const executorProgram = new PublicKey('6doghB248px58JSSwG4qejQ46kFMW4AMj7vzJnWZHNZn') // executor program id, mainnet and testnet are the same
 
-const wallet = Keypair.fromSecretKey(new Uint8Array([
-    133, 78, 3, 104, 72, 181, 47, 108, 156, 11, 166, 164, 245, 243, 34, 1, 209, 89,
-    67, 93, 12, 119, 192, 159, 86, 182, 38, 118, 216, 85, 186, 98, 54, 89,
-    236, 138, 0, 121, 27, 91, 196, 65, 195, 235, 114, 97, 116, 48, 21, 70,
-    214, 184, 199, 241, 216, 168, 93, 191, 111, 218, 41, 53, 3, 73
-]));
+const secretKey = JSON.parse(process.env.SOLANA_SECRET_KEY);
+const wallet = Keypair.fromSecretKey(new Uint8Array(secretKey));
 
 const provider = new anchor.AnchorProvider(connection, new anchor.Wallet(wallet), { commitment: 'confirmed' });
 anchor.setProvider(provider);
 
 let idl;
 try {
-    idl = JSON.parse(readFileSync('../target/idl/factory_contract.json', 'utf8'));
+    idl = JSON.parse(readFileSync('./target/idl/factory_contract.json', 'utf8'));
 } catch (error) {
     console.error("Failed to load IDL:", error);
     process.exit(1);
 }
 
-const program = new anchor.Program(idl, new PublicKey('EjTQazH7zvwvBFDkbJRnpvQfjuQBqjHTdbYE25iaxZoJ'), provider);
+const program = new anchor.Program(idl, new PublicKey(process.env.SOLANA_CONTRACT_ADDRESS), provider);
 
 const COUNT_SEED = 'Count';
 const counterId = 0;
@@ -44,8 +44,18 @@ const counterId = 0;
 
         // Uncomment and modify as needed
         for (const [remoteStr, remotePeer] of Object.entries(remotePeers)) {
+            const remotePeerBytes = arrayify(hexZeroPad(remotePeer, 32))
+
             const remote = parseInt(remoteStr);
-            await setPeers(connection, wallet, remote, arrayify(hexZeroPad(remotePeer, 32)));
+            await setPeers(connection, wallet, remote, remotePeerBytes);
+            await initSendLibrary(connection, wallet, remote);
+            await initReceiveLibrary(connection, wallet, remote)
+            await initOappNonce(connection, wallet, remote, remotePeerBytes)
+            await setSendLibrary(connection, wallet, remote)
+            await setReceiveLibrary(connection, wallet, remote)
+            await initUlnConfig(connection, wallet, wallet, remote)
+            await setOappExecutor(connection, wallet, remote)
+
         }
     } catch (error) {
         console.error("Error in main function:", error);
@@ -79,13 +89,6 @@ async function initCounter(connection, payer, admin, countPDA, endpoint) {
         const [lzComposeTypesAccounts] = await PublicKey.findProgramAddress(
             [Buffer.from('LzComposeTypes'), countPDA.toBuffer()], program.programId
         );
-
-        console.log('Checking individual account related keys:');
-        console.log('Endpoint Program:', endpointProgram);
-        console.log('Wallet Public Key:', wallet.publicKey.toBase58());
-        console.log('Count PDA:', countPDA.toBase58());
-        console.log('oAppRegistry:', oAppRegistry.toBase58());
-        console.log('Event Authority:', eventAuthority.toBase58());
 
         const txInstruction = await program.methods.initCount({
             admin: admin.publicKey,
@@ -130,9 +133,6 @@ async function setPeers(
             program.programId
         );
 
-        console.log('Remote Address:', remoteAddress.toBase58());
-        console.log('Admin Public Key:', admin.publicKey.toBase58());
-
         const txInstruction = await program.methods.setRemote({
             dstEid,
             remote: remotePeer
@@ -148,6 +148,113 @@ async function setPeers(
     } catch (error) {
         console.error("Error in setPeers:", error);
     }
+}
+
+async function initSendLibrary(connection, admin, remote) {
+    const [id] = await oappIDPDA(program.programId, COUNT_SEED, counterId);
+    const ix = await endpointProgram.initSendLibrary(connection, admin.publicKey, id, remote);
+    if (ix == null) {
+        return Promise.resolve();
+    }
+    sendAndConfirm(connection, [admin], [ix]);
+}
+
+async function initReceiveLibrary(connection, admin, remote) {
+    const [id] = await oappIDPDA(program.programId, COUNT_SEED, counterId);
+    const ix = await endpointProgram.initReceiveLibrary(connection, admin.publicKey, id, remote)
+    if (ix == null) {
+        return Promise.resolve()
+    }
+    sendAndConfirm(connection, [admin], [ix])
+}
+
+async function initOappNonce(
+    connection,
+    admin,
+    remote,
+    remotePeer
+) {
+    const [id] = await oappIDPDA(program.programId, COUNT_SEED, counterId);
+    const ix = await endpointProgram.initOAppNonce(connection, admin.publicKey, remote, id, remotePeer);
+    if (ix === null) return Promise.resolve();
+    const current = false;
+    try {
+        const nonce = await endpointProgram.getNonce(connection, id, remote, remotePeer);
+        if (nonce) {
+            console.log('nonce already set');
+            return Promise.resolve();
+        }
+    } catch (e) {
+        /*nonce not init*/
+    }
+    sendAndConfirm(connection, [admin], [ix]);
+}
+
+
+async function setSendLibrary(connection, admin, remote) {
+    const [id] = await oappIDPDA(program.programId, COUNT_SEED, counterId);
+    const sendLib = await endpointProgram.getSendLibrary(connection, id, remote)
+    const current = sendLib ? sendLib.msgLib.toBase58() : ''
+    const [expectedSendLib] = ulnProgram.deriver.messageLib()
+    const expected = expectedSendLib.toBase58()
+    if (current === expected) {
+        return Promise.resolve()
+    }
+    const ix = await endpointProgram.setSendLibrary(admin.publicKey, id, ulnProgram.program, remote)
+    sendAndConfirm(connection, [admin], [ix])
+}
+
+async function setReceiveLibrary(connection, admin, remote) {
+    const [id] = await oappIDPDA(program.programId, COUNT_SEED, counterId);
+    const receiveLib = await endpointProgram.getReceiveLibrary(connection, id, remote);
+    const current = receiveLib ? receiveLib.msgLib.toBase58() : '';
+    const [expectedMessageLib] = ulnProgram.deriver.messageLib();
+    const expected = expectedMessageLib.toBase58();
+    if (current === expected) {
+        return Promise.resolve();
+    }
+    const ix = await endpointProgram.setReceiveLibrary(admin.publicKey, id, ulnProgram.program, remote);
+    sendAndConfirm(connection, [admin], [ix]);
+}
+
+async function initUlnConfig(
+    connection,
+    payer,
+    admin,
+    remote
+) {
+    const [id] = await oappIDPDA(program.programId, COUNT_SEED, counterId);
+
+    const current = await ulnProgram.getSendConfigState(connection, id, remote);
+    if (!current) {
+        const ix = await endpointProgram.initOappConfig(admin.publicKey, ulnProgram, payer.publicKey, id, remote);
+        await sendAndConfirm(connection, [admin], [ix]);
+    }
+}
+
+async function setOappExecutor(connection, admin, remote) {
+    const [id] = await oappIDPDA(program.programId, COUNT_SEED, counterId);
+    const defaultOutboundMaxMessageSize = 10000;
+
+    const [executorPda] = new ExecutorPDADeriver(executorProgram).config();
+    const expected = {
+        maxMessageSize: defaultOutboundMaxMessageSize,
+        executor: executorPda,
+    };
+
+    const current = (await ulnProgram.getSendConfigState(connection, id, remote))?.executor;
+    const ix = await endpointProgram.setOappConfig(connection, admin.publicKey, id, ulnProgram.program, remote, {
+        configType: SetConfigType.EXECUTOR,
+        value: expected,
+    });
+    if (
+        current &&
+        current.executor.toBase58() === expected.executor.toBase58() &&
+        current.maxMessageSize === expected.maxMessageSize
+    ) {
+        return Promise.resolve();
+    }
+    await sendAndConfirm(connection, [admin], [ix]);
 }
 
 async function sendAndConfirm(
