@@ -7,7 +7,7 @@ dotenv.config();
 
 const sepoliaContract: OmniPointHardhat = {
     eid: EndpointId.SEPOLIA_V2_TESTNET,
-    address: process.env.SEPOLIA_CONTRACT_ADDRESS || '',
+    contractName: 'LayerZeroBridge',
 };
 
 const solanaContract: OmniPointHardhat = {
